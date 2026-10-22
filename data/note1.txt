@@ -1,0 +1,7 @@
+Machine Learning Notes
+
+Machine learning is a subset of artificial intelligence that focuses on building systems that learn from data. Common algorithms include linear regression, decision trees, random forests, and neural networks. Supervised learning uses labeled data, while unsupervised learning finds patterns in unlabeled data. Overfitting occurs when a model learns noise in the training data.
+
+Deep learning uses neural networks with many layers. Convolutional neural networks (CNNs) are great for images. Transformers and attention mechanisms power modern NLP models like GPT and BERT.
+
+Evaluation metrics include accuracy, precision, recall, F1 score, and AUC-ROC. Cross-validation helps estimate generalization performance.
