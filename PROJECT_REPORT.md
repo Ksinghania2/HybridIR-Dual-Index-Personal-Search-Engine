@@ -36,4 +36,4 @@ The app is suitable for a trusted, private deployment after the final test and s
 
 ## Repository and release status
 
-The source folder currently has no Git repository metadata or configured GitHub remote. A push cannot be completed until the project is connected to a repository. Keep `.venv/`, `.index/`, `.env`, and Python cache files out of version control. The included sample notes are generic demonstration content; review any replacement personal notes before publishing them.
+The project is initialized as a Git repository on the `main` branch. The verified unit suite passes (4 tests). The GitHub destination supplied for release is `https://github.com/Ksinghania2/HybridIR-Dual-Index-Personal-Search-Engine.git`; the project should be pushed there after confirming the remote accepts the current branch. Keep `.venv/`, `.index/`, `.env`, and Python cache files out of version control. The included sample notes are generic demonstration content; review any replacement personal notes before publishing them.
