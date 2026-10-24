@@ -1,10 +1,6 @@
 """Retriever: search execution and Reciprocal Rank Fusion (RRF)."""
 
-import os
-import re
 from typing import List, Dict, Any
-
-import numpy as np
 
 from src.indexer import DualIndex, tokenize
 
@@ -22,15 +18,40 @@ def _bm25_search(idx: DualIndex, query: str, top_k: int) -> List[Dict[str, Any]]
     if not q_tokens:
         return []
     scores = idx.bm25.get_scores(q_tokens)
-    order = np.argsort(scores)[::-1][:top_k]
     query_terms = set(q_tokens)
+    order = sorted(
+        range(len(scores)),
+        key=lambda i: (
+            scores[i] + _relevance_boost(idx.documents[i], query, query_terms),
+            scores[i],
+            -i,
+        ),
+        reverse=True,
+    )[:top_k]
     out = []
     for i in order:
-        if scores[i] <= 0 or not query_terms.intersection(idx.bm25_tokens[i]):
+        if not query_terms.intersection(idx.bm25_tokens[i]):
             continue
         d = idx.documents[i]
-        out.append({"doc": d, "score": float(scores[i]), "rank": len(out) + 1})
+        score = scores[i] + _relevance_boost(d, query, query_terms)
+        out.append({"doc": d, "score": float(score), "rank": len(out) + 1})
     return out
+
+
+def _relevance_boost(
+    document: Dict[str, Any], query: str, query_terms: set
+) -> float:
+    if not query_terms:
+        return 0.0
+    title_terms = set(tokenize(document["title"]))
+    title_coverage = len(query_terms.intersection(title_terms)) / len(query_terms)
+    normalized_query = " ".join(tokenize(query))
+    normalized_title = " ".join(tokenize(document["title"]))
+    normalized_text = " ".join(tokenize(document["text"]))
+    phrase_match = (
+        normalized_query in normalized_text or normalized_query in normalized_title
+    )
+    return (0.2 * title_coverage) + (0.1 if phrase_match else 0.0)
 
 
 def _vector_search(idx: DualIndex, query: str, top_k: int) -> List[Dict[str, Any]]:
@@ -44,13 +65,20 @@ def _vector_search(idx: DualIndex, query: str, top_k: int) -> List[Dict[str, Any
         sims = cosine_similarity(q_vec, idx.vector_matrix).ravel()
     else:
         return []
-    order = np.argsort(sims)[::-1][:top_k]
+    query_terms = set(tokenize(query))
+    scores = [
+        float(similarity) + _relevance_boost(document, query, query_terms)
+        for document, similarity in zip(idx.documents, sims)
+    ]
+    order = sorted(range(len(scores)), key=lambda i: (scores[i], -i), reverse=True)[
+        :top_k
+    ]
     out = []
     for i in order:
         if sims[i] <= 0:
             continue
         d = idx.documents[i]
-        out.append({"doc": d, "score": float(sims[i]), "rank": len(out) + 1})
+        out.append({"doc": d, "score": scores[i], "rank": len(out) + 1})
     return out
 
 
@@ -59,13 +87,10 @@ def reciprocal_rank_fusion(rankings: List[List[Dict[str, Any]]], k: int = 60) ->
     scores: Dict[str, float] = {}
     doc_map: Dict[str, Dict[str, Any]] = {}
     for ranking in rankings:
-        for item in ranking:
+        for position, item in enumerate(ranking, start=1):
             did = item["doc"]["id"]
             doc_map[did] = item["doc"]
-            r = item.get("rank", 0)
-            if r == 0:
-                # derive rank from position
-                r = ranking.index(item) + 1
+            r = item.get("rank") or position
             scores[did] = scores.get(did, 0.0) + 1.0 / (k + r)
     ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     out = []
@@ -80,7 +105,13 @@ class Retriever:
 
     def search(self, query: str, mode: str = "hybrid", top_k: int = 10) -> List[Dict[str, Any]]:
         self.idx.ensure_loaded()
-        mode = (mode or "hybrid").lower()
+        mode = (mode or "hybrid").strip().lower()
+        if mode not in {"bm25", "vector", "hybrid"}:
+            raise ValueError(f"Unsupported search mode: {mode}")
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+        if not query or not query.strip():
+            return []
         if mode == "bm25":
             res = _bm25_search(self.idx, query, top_k)
             return [{"doc": r["doc"], "score": r["score"], "source": "bm25"} for r in res]

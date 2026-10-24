@@ -4,6 +4,7 @@ import os
 import re
 import pickle
 import hashlib
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -13,17 +14,36 @@ import numpy as np
 try:
     from rank_bm25 import BM25Plus
     HAS_BM25 = True
-except Exception:
+except ImportError:
     HAS_BM25 = False
 
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
     HAS_SKLEARN = True
-except Exception:
+except ImportError:
     HAS_SKLEARN = False
 
 HAS_ST = False
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self.ignored_tags: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs):
+        if tag in {"script", "style"}:
+            self.ignored_tags.append(tag)
+
+    def handle_endtag(self, tag: str):
+        if self.ignored_tags and tag == self.ignored_tags[-1]:
+            self.ignored_tags.pop()
+
+    def handle_data(self, data: str):
+        if not self.ignored_tags:
+            self.parts.append(data)
 
 
 def _st_available() -> bool:
@@ -34,31 +54,59 @@ def _st_available() -> bool:
         import sentence_transformers  # noqa: F401
         HAS_ST = True
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
-SUPPORTED_EXT = {".txt", ".md", ".pdf", ".docx"}
-INDEX_FORMAT_VERSION = 2
+SUPPORTED_EXT = {
+    ".txt",
+    ".md",
+    ".rst",
+    ".log",
+    ".csv",
+    ".json",
+    ".html",
+    ".htm",
+    ".pdf",
+    ".docx",
+}
+INDEX_FORMAT_VERSION = 3
 
 
 def _read_file(path: Path) -> str:
     ext = path.suffix.lower()
-    if ext in (".txt", ".md"):
+    if ext in {".txt", ".md", ".rst", ".log", ".csv", ".json"}:
         return path.read_text(encoding="utf-8", errors="ignore")
+    if ext in {".html", ".htm"}:
+        extractor = _HTMLTextExtractor()
+        extractor.feed(path.read_text(encoding="utf-8", errors="ignore"))
+        return re.sub(r"\s+", " ", " ".join(extractor.parts)).strip()
     if ext == ".pdf":
         try:
             from pdfminer.high_level import extract_text
-            return extract_text(str(path)) or ""
-        except Exception:
-            return ""
+        except ImportError as exc:
+            raise RuntimeError(
+                "PDF indexing requires pdfminer.six; install it with "
+                "`python -m pip install pdfminer.six`."
+            ) from exc
+        return extract_text(str(path)) or ""
     if ext == ".docx":
         try:
             import docx
-            doc = docx.Document(str(path))
-            return "\n".join(p.text for p in doc.paragraphs)
-        except Exception:
-            return ""
+        except ImportError as exc:
+            raise RuntimeError(
+                "DOCX indexing requires python-docx; install it with "
+                "`python -m pip install python-docx`."
+            ) from exc
+        document = docx.Document(str(path))
+        content = [paragraph.text for paragraph in document.paragraphs]
+        content.extend(
+            cell.text
+            for table in document.tables
+            for row in table.rows
+            for cell in row.cells
+        )
+        return "\n".join(content)
     return ""
 
 
@@ -101,12 +149,21 @@ class DualIndex:
 
     def build(self):
         self.documents = load_documents(self.data_dir)
-        corpus_tokens = [tokenize(d["text"]) for d in self.documents]
+        self.bm25 = None
+        self.vectorizer = None
+        self.vector_matrix = None
+        self.embeddings = None
+        self.st_model = None
+        searchable_texts = [
+            f'{document["title"]}\n{document["text"]}'
+            for document in self.documents
+        ]
+        corpus_tokens = [tokenize(text) for text in searchable_texts]
         self.bm25_tokens = corpus_tokens
         if HAS_BM25 and corpus_tokens:
             self.bm25 = BM25Plus(corpus_tokens)
         # vector index
-        texts = [d["text"] for d in self.documents]
+        texts = searchable_texts
         if self.use_embeddings and _st_available() and texts:
             from sentence_transformers import SentenceTransformer
             self.st_model = SentenceTransformer("all-MiniLM-L6-v2")

@@ -17,8 +17,18 @@ INDEX_DIR = os.environ.get("INDEX_DIR", str(ROOT / ".index"))
 
 st.set_page_config(page_title="HybridIR Search", page_icon="🔍", layout="wide")
 
-st.title("🔍 HybridIR — Dual-Index Personal Search Engine")
-st.caption("BM25 lexical index + vector index fused with Reciprocal Rank Fusion (RRF).")
+st.markdown(
+    """
+    <style>
+    .block-container {max-width: 1100px; padding-top: 2rem; padding-bottom: 3rem;}
+    [data-testid="stMetric"] {background: #f5f7fb; padding: 1rem; border-radius: 0.8rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("🔍 HybridIR")
+st.caption("Your private notes, searchable with lexical and vector retrieval.")
 
 
 @st.cache_resource
@@ -32,11 +42,15 @@ idx = get_index()
 retriever = Retriever(idx)
 
 with st.sidebar:
-    st.header("Settings")
+    st.header("Search settings")
     mode = st.selectbox("Search mode", ["hybrid", "bm25", "vector"], index=0)
     top_k = st.slider("Top K", 3, 30, 10)
     st.markdown("---")
-    st.write(f"Indexed documents: **{idx.num_docs}**")
+    st.metric("Indexed documents", idx.num_docs)
+    st.caption("Hybrid combines BM25 and TF-IDF using Reciprocal Rank Fusion.")
+    with st.expander("Supported files"):
+        st.write("TXT, Markdown, reStructuredText, logs, CSV, JSON, and HTML")
+        st.caption("PDF and DOCX are available with their optional reader packages.")
     if st.button("Rebuild index"):
         with st.spinner("Indexing..."):
             idx.build()
@@ -44,19 +58,32 @@ with st.sidebar:
         st.success("Index rebuilt.")
         st.rerun()
 
-query = st.text_input("Search your notes", placeholder="e.g. machine learning notes")
+with st.form("search_form"):
+    query = st.text_input(
+        "Search your notes",
+        placeholder="Try a topic, phrase, or document title",
+        help="Searches document titles and content.",
+    )
+    submitted = st.form_submit_button("Search", type="primary")
 
-if query:
+if submitted and query:
     results = retriever.search(query, mode=mode, top_k=top_k)
-    st.subheader(f"Results ({len(results)})")
+    st.subheader(f"{len(results)} result{'s' if len(results) != 1 else ''}")
     if not results:
-        st.info("No results found.")
-    for r in results:
-        d = r["doc"]
+        st.info("No matching notes. Try different keywords or rebuild the index.")
+    for position, result in enumerate(results, start=1):
+        document = result["doc"]
         with st.container(border=True):
-            st.markdown(f"**{d['title']}**  \n*score: {r['score']:.4f} · source: {r['source']}*")
-            snippet = d["text"][:400].replace("\n", " ")
-            st.write(snippet + ("..." if len(d["text"]) > 400 else ""))
-            st.caption(d["path"])
+            heading, score = st.columns([5, 1])
+            with heading:
+                st.write(f"**{position}. {document['title']}**")
+            with score:
+                st.metric("Score", f"{result['score']:.3f}")
+            text = " ".join(document["text"].split())
+            snippet = text[:400]
+            st.write(snippet + ("..." if len(text) > 400 else ""))
+            st.caption(f"{result['source'].upper()} · {document['path']}")
+elif submitted:
+    st.info("Enter a search query to find matching notes.")
 else:
-    st.info("Enter a query to search.")
+    st.info("Search across your local notes. Your documents stay on this machine.")
